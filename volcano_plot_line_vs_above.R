@@ -1,5 +1,7 @@
+# feb 13, 2024
 ##Attempt at volcano plot for Line vs. Above
-
+getwd()
+setwd(Users/Delaney/OneDrive/unknown/Documents/University of Utah/Puri Lab/1. Gradient syringe validation/~RNA-seq/LW13 segment)
 
 # remove rows that contain NA values
 la <- diff.exp.matrix.line.trimmed.VS.above.trimmed[complete.cases(diff.exp.matrix.line.trimmed.VS.above.trimmed), ]
