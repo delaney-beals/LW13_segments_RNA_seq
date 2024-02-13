@@ -1,0 +1,217 @@
+---
+title: "RBC 16S analysis: metabolic associations"
+output: html_document
+---
+2024
+Written by Delaney Beals \| Date created: December 10, 2023 \| Date most recent edit: December 10, 2023
+
+# Relative abundance composition plot
+
+Resource: <https://astrobiomike.github.io/amplicon/dada2_workflow_ex>
+
+```{r message=FALSE, warning=FALSE}
+# load in libraries
+library(tidyverse) 
+library(phyloseq)
+library(vegan)
+library(DESeq2)
+library(dendextend)
+library(viridis)
+library(ggplot2)
+library(readr)
+library(gridExtra)
+library(cowplot)
+library(dplyr)
+library(forcats)
+library(patchwork)
+library(ggpubr)
+library(corrplot)
+
+
+(.packages())
+```
+
+Making out phyloseq object
+
+```{r}
+# LOAD IN DATA
+bact_count_table <- read.table("June_Oct_MERGE_ASV_counts.tsv", header = T, row.names = 1, check.names = F, sep = "\t") 
+bact_taxa_table <- as.matrix(read.table("June_Oct_MERGE_ASV_taxa_table.tsv", header = T, row.names = 1, check.names = F, sep = "\t"))
+bact_sample_info_table <- read.table("June_Oct_16S_MERGE_metadata - Copy.csv", header = T, row.names = 1, sep = ",") 
+
+# first we need to create a phyloseq object using our un-transformed count table
+tax_mat <- as.matrix(bact_taxa_table)
+TAX <- phyloseq::tax_table(tax_mat)
+
+samples = sample_data(bact_sample_info_table)
+
+otu_mat <- as.matrix(bact_count_table)
+OTU = otu_table(otu_mat, taxa_are_rows = TRUE)
+ASV_physeq <- phyloseq(TAX, OTU, samples)
+```
+
+## Calculating relative abundance
+
+First make a table with proportions of reads. This will essentially be a normalization step in that we are calculating relative abundance of every ASV within each sample.
+
+```{r}
+# using phyloseq to make a count table that has summed all ASVs that were in the same family
+
+fam_counts_tab <- otu_table(tax_glom(ASV_physeq, taxrank="Family")) 
+
+# making a vector of genus names to set as row names
+
+family_tax_vec <- as.vector(phyloseq::tax_table(tax_glom(ASV_physeq, taxrank="Family"))[,5]) 
+
+rownames(fam_counts_tab) <- as.vector(family_tax_vec)
+```
+
+We also have to account for sequences that weren't assigned any taxonomy even at the phylum level these came into R as 'NAs' in the taxonomy table, but their counts are still in the count table so we can get that value for each sample by subtracting the column sums of this new table (that has everything that had a phylum assigned to it) from the column sums of the starting count table (that has all representative sequences)
+
+```{r}
+unclassified_tax_counts_fam <- colSums(bact_count_table) - colSums(fam_counts_tab)
+
+# and we'll add this row to our phylum count table:
+
+fam_and_unidentified_counts_tab <- rbind(fam_counts_tab, "Unclassified"=unclassified_tax_counts_fam)
+
+# and to check we didn't miss any other sequences, we can compare the column sums to see if they are the same.If "TRUE", we know nothing fell through the cracks 
+
+identical(colSums(fam_and_unidentified_counts_tab), colSums(bact_count_table)) 
+```
+
+Now we'll generate a proportions table for summarizing:
+
+```{r}
+fam_taxa_proportions_tab <- apply(fam_and_unidentified_counts_tab, 2, function(x) x/sum(x)*100)
+
+#transform the table so that genera are in columns
+
+write.table(fam_taxa_proportions_tab, "family_proportions.tsv", sep = "\t", quote = F, col.names = NA)
+```
+
+### MOB/NMH subgroup
+
+Only keep families of interest-- mostly methanotrophs, some methylotrophs and heterotrophs that have been reported to be associated with methanotrophs.
+
+```{r}
+# transpose table so that samples are in rows, genera are in columns
+fam_taxa_proportions_tab_df <- as.data.frame(t(fam_taxa_proportions_tab))
+
+# classify our genera into functional groups
+f_methanotrophs <- c("Methylocystaceae|Beijerinckiaceae|Methylococcaceae|Methylothermaceae|Crenotrichaceae|Methylacidiphilaceae")
+
+f_methylotrophs <- c("Methylophilaceae|Methylocystaceae|Methylobacteriaceae|Hyphomicrobiacea")
+
+f_meth_all <- c("Methylocystaceae|Beijerinckiaceae|Methylococcaceae|Methylothermaceae|Crenotrichaceae|Methylacidiphilaceae|Methylophilaceae|Methylocystaceae|Methylobacteriaceae|Hyphomicrobiacea")
+
+# create new tables containing only the genera groups we want
+f_methanotrophs_prop <- fam_taxa_proportions_tab_df %>% select(matches(f_methanotrophs))
+f_methylotrophs_prop <- fam_taxa_proportions_tab_df %>% select(matches(f_methylotrophs))
+f_meth_all_prop <- fam_taxa_proportions_tab_df %>% select(matches(f_meth_all))
+
+# transpose table again so that rows are genera and columns are samples
+f_methanotrophs_prop1 <- as.data.frame(t(f_methanotrophs_prop))
+f_methylotrophs_prop1 <- as.data.frame(t(f_methylotrophs_prop))
+f_meth_all_prop1 <- as.data.frame(t(f_meth_all_prop))
+
+# make sure we are in a data frame
+f_methanotrophs_prop_tab <- f_methanotrophs_prop1 %>%
+  as_tibble(rownames= "Family") %>% 
+  as.data.frame(rownames=paste0("Family", 1:24)) 
+
+f_methylotrophs_prop_tab <- f_methylotrophs_prop1 %>%
+  as_tibble(rownames= "Family") %>% 
+  as.data.frame(rownames=paste0("Family", 1:24))
+
+f_meth_all_prop_tab <- f_meth_all_prop1 %>%
+  as_tibble(rownames= "Family") %>% 
+  as.data.frame(rownames=paste0("Family", 1:24))
+```
+
+```{r}
+f_MOB_prop <- pivot_longer(f_methanotrophs_prop_tab, !Family, names_to = "Sample", values_to = "Proportion") %>% data.frame()
+f_NMM_prop <- pivot_longer(f_methylotrophs_prop_tab, !Family, names_to = "Sample", values_to = "Proportion") %>% data.frame()
+f_prop <- pivot_longer(f_meth_all_prop_tab, !Family, names_to = "Sample", values_to = "Proportion") %>% data.frame()
+```
+
+```{r}
+ggplot(f_prop, aes(x = Sample, y = Family, size = Proportion)) + 
+  geom_point(alpha = 0.7) 
+```
+
+Looks good. To break this up, I want to load in the metadata so that we can change the colors depending on different characteristics of each sample.
+
+```{r}
+# read in metadata CSV
+bact_sample_info_table <- read.table("June_Oct_16S_MERGE_metadata - Copy.csv", header = T, row.names = 1, sep = ",")
+
+# Adding information from our metadata to group/color our bubble plot based on different characteristics of our samples
+sample_info_for_merge <- data.frame(
+  "Sample" = row.names(bact_sample_info_table),
+  "soil" = bact_sample_info_table$soil,
+  "replicate"= bact_sample_info_table$replicate,
+  "template" = bact_sample_info_table$template,
+  "soil.temp" = bact_sample_info_table$soil.temp,
+  "month" = bact_sample_info_table$month,
+  "monthsoil" = bact_sample_info_table$monthsoil,
+  "full_name" = bact_sample_info_table$full_name,
+  stringsAsFactors=F)
+
+# merging this table with the table containing our proportions
+f_prop_info <- merge(f_prop, sample_info_for_merge) 
+f_MOB_prop_info <- merge(f_MOB_prop, sample_info_for_merge) 
+f_NMM_prop_info <- merge(f_NMM_prop, sample_info_for_merge) 
+```
+
+```{r}
+# for editing theme
+my_theme <- theme_bw() +
+        theme(text=element_text(size = 12), 
+        axis.text.x=element_text(size=10, color = "black"), 
+        axis.text.y = element_text(size=10, color = "black"),
+        title = element_text(size = 10, color = "black"), 
+        legend.title=element_blank(),
+        panel.grid.minor = element_blank(), 
+        panel.grid.major = element_blank()
+        )
+```
+
+
+```{r}
+# overall plot
+ggplot(f_prop_info, aes(Proportion, Family)) +
+  geom_jitter(aes(color=factor(monthsoil), shape=factor(template)), 
+              size=2.5, width=0.15, height=0) +
+  geom_boxplot(fill=NA, outlier.color=NA) + 
+  my_theme 
+
+# zooming into smaller percentages
+ggplot(f_prop_info, aes(Proportion, Family)) +
+  geom_jitter(aes(color=factor(monthsoil), shape=factor(template)), 
+              size=2.5, width=0.15, height=0) +
+  geom_boxplot(fill=NA, outlier.color=NA) + 
+  xlim(0,0.5) +
+  my_theme 
+```
+
+```{r}
+write.csv(f_meth_all_prop_tab, "f_meth_all_prop_tab.csv")
+f_MOB_NMH_gDNA <- read.table("f_meth_all_prop_tab_gDNA.csv", header = T, row.names = 1, sep = ",")
+f_MOB_NMH_gDNA <- t(f_MOB_NMH_gDNA)
+
+# create a correlation matrix with the data
+cc_f_MOB_NMH_gDNA = cor(f_MOB_NMH_gDNA, method = "pearson")
+corrplot(cc_f_MOB_NMH_gDNA,  type = "upper")
+```
+
+```{r}
+corrplot(cc_f_MOB_NMH_gDNA)
+```
+
+```{r}
+# make them look nicer
+corrplot(cc_f_MOB_NMH_gDNA, tl.col = "black", order = "hclust", hclust.method = "average", addrect = 4, tl.cex = 0.7)
+
+corrplot(cc_f_MOB_NMH_gDNA, tl.col = "black", addrect = 4, tl.cex = 0.7, type = "upper")
+```
