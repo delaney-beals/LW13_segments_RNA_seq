@@ -15,4 +15,3 @@ pheatmap(datas,
          show_rownames = FALSE,
          color = pale(50))
 
-#end
